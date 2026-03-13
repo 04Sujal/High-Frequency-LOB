@@ -1,70 +1,114 @@
 #include <iostream>
-#include <list>
 #include <map>
-#include <unordered_map>
+#include <list>
 #include <memory>
+#include <unordered_map>
 #include <vector>
+#include <algorithm>
 
-// 1. Fixed-point price (e.g., 150.25 -> 15025)
-using Price = int64_t;
-using OrderID = uint64_t;
-
+// --- STRUCTURES ---
 struct Order {
-    OrderID id;
-    Price price;
+    uint64_t id;
+    double price;
     int qty;
     bool isBuy;
 
-    Order(OrderID i, Price p, int q, bool b) 
-        : id(i), price(p), qty(q), isBuy(b) {}
+    Order(uint64_t _id, double _p, int _q, bool _b) 
+        : id(_id), price(_p), qty(_q), isBuy(_b) {}
 };
 
+// --- THE ENGINE ---
 class OrderBook {
 private:
-    // Bids: Sorted Descending (High to Low)
-    std::map<Price, std::list<std::unique_ptr<Order>>, std::greater<Price>> bids;
-    // Asks: Sorted Ascending (Low to High)
-    std::map<Price, std::list<std::unique_ptr<Order>>> asks;
-    
-    // Quick Lookup: Map ID to the iterator in the specific list
-    using OrderIter = std::list<std::unique_ptr<Order>>::iterator;
-    std::unordered_map<OrderID, OrderIter> orderLookup;
+    std::map<double, std::list<std::unique_ptr<Order>>, std::greater<double>> bids;
+    std::map<double, std::list<std::unique_ptr<Order>>> asks;
+    std::unordered_map<uint64_t, std::list<std::unique_ptr<Order>>::iterator> orderLookup;
+
+    mutable double cachedMidPrice = 0.0;
+    mutable bool midPriceDirty = true;
 
 public:
-    void addOrder(OrderID id, Price price, int qty, bool isBuy) {
-        if (isBuy) {
-            auto& level = bids[price];
-            level.push_back(std::make_unique<Order>(id, price, qty, isBuy));
-            orderLookup[id] = std::prev(level.end());
-            std::cout << "[LOB] Added Bid " << id << ": " << qty << " @ " << price << "\n";
-        } else {
-            auto& level = asks[price];
-            level.push_back(std::make_unique<Order>(id, price, qty, isBuy));
-            orderLookup[id] = std::prev(level.end());
-            std::cout << "[LOB] Added Ask " << id << ": " << qty << " @ " << price << "\n";
+    void matchAggressiveOrder(double price, int& qty, bool matchBids) {
+        auto& targetMap = matchBids ? bids : asks;
+        auto it = targetMap.begin();
+
+        while (it != targetMap.end() && qty > 0) {
+            // Price check: Bids must be >= price, Asks must be <= price
+            if ((matchBids && it->first < price) || (!matchBids && it->first > price)) break;
+
+            auto& priceLevel = it->second;
+            while (!priceLevel.empty() && qty > 0) {
+                auto& restingOrder = priceLevel.front();
+                int matchQty = std::min(qty, restingOrder->qty);
+
+                std::cout << "  [MATCH] ID:" << restingOrder->id << " Size:" << matchQty << " @ $" << it->first << std::endl;
+
+                qty -= matchQty;
+                restingOrder->qty -= matchQty;
+
+                if (restingOrder->qty == 0) {
+                    orderLookup.erase(restingOrder->id);
+                    priceLevel.pop_front();
+                }
+            }
+            if (priceLevel.empty()) it = targetMap.erase(it);
+            else ++it;
         }
     }
 
-    void cancelOrder(OrderID id) {
-        auto it = orderLookup.find(id);
-        if (it == orderLookup.end()) return;
+    void addOrder(uint64_t id, double price, int qty, bool isBuy) {
+        std::cout << (isBuy ? "BUY " : "SELL ") << qty << " @ $" << price << " (ID:" << id << ")" << std::endl;
+        
+        int remainingQty = qty;
+        if (isBuy) {
+            matchAggressiveOrder(price, remainingQty, false); // Match against Asks
+            if (remainingQty > 0) {
+                auto& list = bids[price];
+                list.push_back(std::make_unique<Order>(id, price, remainingQty, isBuy));
+                orderLookup[id] = std::prev(list.end());
+            }
+        } else {
+            matchAggressiveOrder(price, remainingQty, true); // Match against Bids
+            if (remainingQty > 0) {
+                auto& list = asks[price];
+                list.push_back(std::make_unique<Order>(id, price, remainingQty, isBuy));
+                orderLookup[id] = std::prev(list.end());
+            }
+        }
+        midPriceDirty = true;
+    }
 
-        OrderIter listIt = it->second;
-        Price p = (*listIt)->price;
-        bool isBuy = (*listIt)->isBuy;
-
-        if (isBuy) bids[p].erase(listIt);
-        else asks[p].erase(listIt);
-
-        orderLookup.erase(it);
-        std::cout << "[LOB] Canceled " << id << "\n";
+    double getMidPrice() const {
+        if (midPriceDirty) {
+            if (bids.empty() || asks.empty()) cachedMidPrice = 0.0;
+            else cachedMidPrice = (bids.begin()->first + asks.begin()->first) / 2.0;
+            midPriceDirty = false;
+        }
+        return cachedMidPrice;
     }
 };
 
+// --- SIMULATION ---
 int main() {
     OrderBook lob;
-    lob.addOrder(101, 15025, 100, true);
-    lob.addOrder(103, 15030, 200, true);
-    lob.cancelOrder(101);
+
+    std::cout << "--- STARTING HFT MATCHING ENGINE ---" << std::endl;
+
+    // 1. Add some passive selling pressure
+    lob.addOrder(101, 100.10, 50, false);
+    lob.addOrder(102, 100.20, 100, false);
+
+    // 2. Add some passive buying pressure
+    lob.addOrder(201, 99.90, 50, true);
+
+    std::cout << "Current Mid-Price: $" << lob.getMidPrice() << std::endl;
+
+    // 3. AGGRESSIVE BUY: This should "Cross" the book and trade
+    std::cout << "\n--- Incoming Aggressive Buy Order ---" << std::endl;
+    lob.addOrder(301, 100.15, 60, true); 
+
+    std::cout << "\nFinal Mid-Price: $" << lob.getMidPrice() << std::endl;
+    std::cout << "--- SIMULATION COMPLETE ---" << std::endl;
+
     return 0;
 }
