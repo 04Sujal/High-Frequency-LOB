@@ -14,7 +14,7 @@ A high-performance matching engine core written in C++20, optimized for low-late
 
 * **Header-Only Core:** The engine is encapsulated in a highly portable `OrderBook` class.
 * **Dirty-Bit Caching:** Mid-price calculations are cached and only recalculated when the "Best Bid/Ask" is affected, saving CPU cycles.
-* **Data Structures:** * `std::map`: Manages price levels with logarithmic search complexity ($O(\log N)$).
+* **Data Structures:** * `std::map`: Manages price levels with logarithmic search complexity O(log N).
     * `std::list`: Handles the queue of orders at each price level to maintain strict FIFO time priority.
 
 ## Future Optimizations
