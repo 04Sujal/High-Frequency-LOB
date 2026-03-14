@@ -1,24 +1,20 @@
-# High-Frequency Limit Order Book (LOB)
+# High-Frequency Limit Order Book (LOB) & Gateway
 
-A high-performance matching engine core written in C++20, optimized for low-latency market data processing and order execution.
+A high-performance matching engine and data ingestion gateway written in C++20. Optimized for low-latency financial trading environments.
 
 ## Key Features
-
-* **Price-Time Priority:** Implements a standard matching algorithm using `std::map` (Price) and `std::list` (Time).
-* **Zero-Copy Logic:** Designed to minimize memory allocations during the "Hot Path" of order matching.
-* **Order Tracking:** $O(1)$ order cancellation and modification via an internal `std::unordered_map` lookup.
-* **Smart Analytics:** Real-time calculation of **Mid-Price** and **Order Book Imbalance** to detect market trends.
-* **Memory Efficiency:** Utilizes `std::unique_ptr` for safe, automated memory management without the overhead of raw pointers.
+* **Price-Time Priority:** Standard FIFO matching algorithm using `std::map` and `std::list`.
+* **Order Entry Gateway:** Logic for parsing string-based market data (FIX-style) into binary engine formats.
+* **$O(1)$ Cancellation:** Internal `std::unordered_map` stores iterators for instant order removal.
+* **Smart Analytics:** Real-time cached calculation of Mid-Price and Order Book Imbalance.
+* **Modern Memory Management:** Uses `std::unique_ptr` and Move Semantics to ensure zero memory leaks and minimal copies.
 
 ## Technical Implementation
-
-* **Header-Only Core:** The engine is encapsulated in a highly portable `OrderBook` class.
-* **Dirty-Bit Caching:** Mid-price calculations are cached and only recalculated when the "Best Bid/Ask" is affected, saving CPU cycles.
-* **Data Structures:** * `std::map`: Manages price levels with logarithmic search complexity O(log N).
-    * `std::list`: Handles the queue of orders at each price level to maintain strict FIFO time priority.
+* **Zero-Copy Ingestion:** Designed to minimize data duplication as orders move from the gateway to the engine.
+* **Efficient Caching:** Utilizes "Dirty-Bits" to ensure Mid-Price is only recalculated when the top-of-book changes.
+* **Type Safety:** Implements `enum class` for Side identification, reducing memory footprint to 1 byte.
 
 ## Future Optimizations
-
-* **Lock-Free Logging:** Implementation of a ring-buffer for asynchronous trade recording.
-* **Bit-Packing:** Compressing the `Order` struct to fit within single cache lines (64 bytes).
-* **SIMD Support:** Utilizing vector instructions for faster volume aggregation.
+* **Fast Parsing:** Replace `std::stod` with `std::from_chars` for non-allocating numeric conversion.
+* **Binary Protocols:** Integration of binary feed handlers (e.g., NASDAQ ITCH) to bypass string parsing latency.
+* **Kernel Bypass:** Future support for Solarflare/Mellanox specialized networking to reduce TCP overhead.
