@@ -1,20 +1,29 @@
-# High-Frequency Limit Order Book (LOB) & Gateway
+# High-Frequency Limit Order Book (LOB) & Matching Engine
 
-A high-performance matching engine and data ingestion gateway written in C++20. Optimized for low-latency financial trading environments.
+A Tier-1, ultra-low-latency matching engine and data ingestion gateway written in Modern C++. This project demonstrates industrial-grade techniques used in High-Frequency Trading (HFT) to achieve deterministic performance and sub-microsecond execution.
 
-## Key Features
-* **Price-Time Priority:** Standard FIFO matching algorithm using `std::map` and `std::list`.
-* **Order Entry Gateway:** Logic for parsing string-based market data (FIX-style) into binary engine formats.
-* **$O(1)$ Cancellation:** Internal `std::unordered_map` stores iterators for instant order removal.
-* **Smart Analytics:** Real-time cached calculation of Mid-Price and Order Book Imbalance.
-* **Modern Memory Management:** Uses `std::unique_ptr` and Move Semantics to ensure zero memory leaks and minimal copies.
+## 🚀 High-Performance Architecture
+* **Lock-Free Concurrency:** Utilizes a **Single-Producer Single-Consumer (SPSC)** Ring Buffer with `std::atomic` memory barriers (Acquire/Release semantics) to bridge Network and Strategy threads without mutex contention.
+* **Deterministic Memory (Zero-Allocation):** Implements a **Fixed-Size Memory Pool** for Order objects, eliminating runtime heap allocations (`new`/`malloc`) in the critical path to prevent OS-induced latency spikes.
+* **O(1) Price-Level Discovery:** Replaced traditional $O(\log N)$ tree-based maps with a **Flat-Map (Array-based indexing)**. This allows for constant-time access to price levels by mapping financial ticks directly to memory offsets.
+* **Hardware-Level Optimization:** Employs **Thread Affinity (CPU Pinning)** to lock critical execution paths to specific physical cores, maximizing L1/L2 cache hits and eliminating context-switch overhead.
 
-## Technical Implementation
-* **Zero-Copy Ingestion:** Designed to minimize data duplication as orders move from the gateway to the engine.
-* **Efficient Caching:** Utilizes "Dirty-Bits" to ensure Mid-Price is only recalculated when the top-of-book changes.
-* **Type Safety:** Implements `enum class` for Side identification, reducing memory footprint to 1 byte.
+## 🛠️ Core Features
+* **Price-Time Priority:** Standard FIFO matching algorithm optimized for high-throughput environments.
+* **Fixed-Point Math:** Uses `int64_t` for all price calculations to avoid the non-deterministic precision and performance overhead of floating-point arithmetic.
+* **Zero-Copy Ingestion:** Designed to overlay binary structures directly onto network buffers using `reinterpret_cast` and `[[packed]]` structs for "wire-to-engine" speed.
+* **Smart Analytics:** Real-time calculation of **Order Book Imbalance (OBI)** and Mid-Price for Alpha generation.
 
-## Future Optimizations
-* **Fast Parsing:** Replace `std::stod` with `std::from_chars` for non-allocating numeric conversion.
-* **Binary Protocols:** Integration of binary feed handlers (e.g., NASDAQ ITCH) to bypass string parsing latency.
-* **Kernel Bypass:** Future support for Solarflare/Mellanox specialized networking to reduce TCP overhead.
+## 🏗️ Technical Stack
+* **Language:** C++20
+* **Concurrency:** Lock-free primitives (`std::atomic`), Multi-threading (`std::thread`)
+* **Memory:** Custom Memory Pools, Cache-aligned structures
+* **Gateway:** Zero-copy binary parsing, `std::string_view` for high-speed string slicing
+
+## 📈 Roadmap & Alpha Generation
+* **Signal Processing:** Integration of **Lasso (L1) Regularization** for sparse feature selection in market-making strategies.
+* **Kernel Bypass:** Future integration of User-space networking (e.g., Solarflare OpenOnload) to bypass the Linux kernel TCP/IP stack.
+* **SIMD Vectorization:** Utilizing AVX-512 instructions for parallelized book updates and signal calculation.
+
+---
+*Developed for high-performance financial engineering and low-latency systems research.*
