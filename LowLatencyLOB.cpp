@@ -1,94 +1,115 @@
 #include <iostream>
 #include <vector>
 #include <map>
-#include <unordered_map>
-#include <string>
-#include <algorithm>
+#include <atomic>
+#include <thread>
+#include <windows.h> // For CPU Affinity
 #include <cstdint>
 
-// --- TIER 1 STRUCTURES ---
+// --- STRUCTURES ---
 struct Order {
     uint64_t id;
-    int64_t price; // Fixed-point (e.g., $100.25 -> 1002500)
+    int64_t price;
     uint32_t qty;
     bool isBuy;
     bool active;
-
     Order() : id(0), price(0), qty(0), isBuy(true), active(false) {}
 };
 
+// --- LOCK-FREE SPSC QUEUE ---
+template <typename T, size_t Size>
+class SPSCQueue {
+private:
+    T buffer[Size];
+    std::atomic<size_t> head{0};
+    std::atomic<size_t> tail{0};
+public:
+    bool push(const Order& item) {
+        size_t h = head.load(std::memory_order_relaxed);
+        size_t nextHead = (h + 1) % Size;
+        if (nextHead == tail.load(std::memory_order_acquire)) return false;
+        buffer[h] = item;
+        head.store(nextHead, std::memory_order_release);
+        return true;
+    }
+    bool pop(Order& item) {
+        size_t t = tail.load(std::memory_order_relaxed);
+        if (t == head.load(std::memory_order_acquire)) return false;
+        item = buffer[t];
+        tail.store((t + 1) % Size, std::memory_order_release);
+        return true;
+    }
+};
+
+// --- THE ORDERBOOK ENGINE ---
 class OrderBook {
 private:
     static const int MAX_ORDERS = 100000;
-    std::vector<Order> pool;
+    std::vector<Order> pool; 
     std::vector<int> freeSlots;
-
-    // Price -> Vector of Indices into 'pool'
+    
+    // Still using Map for now (We will Flatten this in the next Phase!)
     std::map<int64_t, std::vector<int>, std::greater<int64_t>> bids;
     std::map<int64_t, std::vector<int>> asks;
 
 public:
     OrderBook() {
-        pool.resize(MAX_ORDERS); // This allocates 3.2MB on the Heap safely
-        for (int i = MAX_ORDERS - 1; i >= 0; --i) {
-            freeSlots.push_back(i);
-        }
+        pool.resize(MAX_ORDERS);
+        for (int i = MAX_ORDERS - 1; i >= 0; --i) freeSlots.push_back(i);
     }
 
-    int acquireOrder() {
-        if (freeSlots.empty()) return -1;
+    void processOrder(const Order& incoming) {
         int idx = freeSlots.back();
         freeSlots.pop_back();
-        return idx;
-    }
+        pool[idx] = incoming;
+        pool[idx].active = true;
 
-    void addOrder(uint64_t id, int64_t price, uint32_t qty, bool isBuy) {
-        // 1. Try matching first (simplified for this snippet)
-        uint32_t remainingQty = qty;
+        if (incoming.isBuy) bids[incoming.price].push_back(idx);
+        else asks[incoming.price].push_back(idx);
 
-        // 2. If not fully matched, add to pool
-        int idx = acquireOrder();
-        if (idx != -1) {
-            pool[idx].id = id;
-            pool[idx].price = price;
-            pool[idx].qty = remainingQty;
-            pool[idx].isBuy = isBuy;
-            pool[idx].active = true;
-
-            if (isBuy) bids[price].push_back(idx);
-            else asks[price].push_back(idx);
-            
-            std::cout << "Added " << (isBuy ? "BUY" : "SELL") << " ID:" << id << " @ " << price << std::endl;
-        }
-    }
-
-    // High-performance "walk" through the book
-    void printTop() {
-        if (!bids.empty()) std::cout << "Best Bid: " << bids.begin()->first << std::endl;
-        if (!asks.empty()) std::cout << "Best Ask: " << asks.begin()->first << std::endl;
-        else std::cout << "No Asks in book." << std::endl;
+        std::cout << "[Strategy Thread] Processed ID: " << incoming.id << " @ " << incoming.price << std::endl;
     }
 };
 
-// --- FAST PARSING UTILITY ---
-int64_t fastParsePrice(const std::string& s) {
-    int64_t res = 0;
-    for (char c : s) {
-        if (c == '.') continue;
-        res = res * 10 + (c - '0');
+// --- GLOBALS FOR CONCURRENCY ---
+SPSCQueue<Order, 1024> marketDataQueue;
+std::atomic<bool> keepRunning{true};
+
+void set_affinity(int core_id) {
+    SetThreadAffinityMask(GetCurrentThread(), (static_cast<DWORD_PTR>(1) << core_id));
+}
+
+// --- THREAD 1: THE NETWORK SIMULATOR ---
+void exchangeSimulator() {
+    set_affinity(1); 
+    for(int i = 0; i < 5; ++i) {
+        Order o;
+        o.id = i + 1; o.price = 10025; o.qty = 10; o.isBuy = true;
+        while(!marketDataQueue.push(o)); // Spin-push
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Simulate network gap
     }
-    return res;
+    keepRunning = false;
+}
+
+// --- THREAD 2: THE MATCHING ENGINE ---
+void engineProcess() {
+    set_affinity(2);
+    OrderBook lob;
+    Order incoming;
+    while(keepRunning.load() || marketDataQueue.pop(incoming)) {
+        if(marketDataQueue.pop(incoming)) {
+            lob.processOrder(incoming);
+        }
+    }
 }
 
 int main() {
-    std::cout << "--- ENGINE STARTING ---" << std::endl;
-    OrderBook lob;
-    
-    // Simulate incoming normalized data
-    lob.addOrder(1, fastParsePrice("100.25"), 100, true);
-    lob.addOrder(2, fastParsePrice("100.30"), 50, false);
-    
-    lob.printTop();
-    std::cout << "--- ENGINE SHUTTING DOWN ---" << std::endl;
+    std::cout << "--- STARTING CONCURRENT ENGINE ---" << std::endl;
+    std::thread netThread(exchangeSimulator);
+    std::thread stratThread(engineProcess);
+
+    netThread.join();
+    stratThread.join();
+    std::cout << "--- ENGINE SHUTDOWN CLEANLY ---" << std::endl;
     return 0;
 }
