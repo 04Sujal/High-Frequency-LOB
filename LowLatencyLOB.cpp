@@ -45,12 +45,23 @@ public:
 class OrderBook {
 private:
     static const int MAX_ORDERS = 100000;
+    static const int64_t MIN_PRICE = 10000;
+    static const int64_t MAX_PRICE = 10500;
+    static const size_t RANGE = 501;
+
+    // 1. The Memory Pool (The "Rows")
     std::vector<Order> pool; 
     std::vector<int> freeSlots;
-    
-    // Still using Map for now (We will Flatten this in the next Phase!)
-    std::map<int64_t, std::vector<int>, std::greater<int64_t>> bids;
-    std::map<int64_t, std::vector<int>> asks;
+
+    // 2. The Flat Map (The "Price Levels")
+    // Each index represents a $0.01 tick
+    std::vector<int> bidLevels[RANGE]; 
+    std::vector<int> askLevels[RANGE];
+
+    size_t getIndex(int64_t price) {
+        if (price < MIN_PRICE || price > MAX_PRICE) return 0; 
+        return static_cast<size_t>(price - MIN_PRICE);
+    }
 
 public:
     OrderBook() {
@@ -58,16 +69,27 @@ public:
         for (int i = MAX_ORDERS - 1; i >= 0; --i) freeSlots.push_back(i);
     }
 
-    void processOrder(const Order& incoming) {
+    // This was missing!
+    int acquireOrder() {
+        if (freeSlots.empty()) return -1;
         int idx = freeSlots.back();
         freeSlots.pop_back();
-        pool[idx] = incoming;
-        pool[idx].active = true;
+        return idx;
+    }
 
-        if (incoming.isBuy) bids[incoming.price].push_back(idx);
-        else asks[incoming.price].push_back(idx);
+    void processOrder(const Order& incoming) {
+        int poolIdx = acquireOrder(); 
+        if (poolIdx == -1) return; // Pool full!
 
-        std::cout << "[Strategy Thread] Processed ID: " << incoming.id << " @ " << incoming.price << std::endl;
+        pool[poolIdx] = incoming;
+        pool[poolIdx].active = true;
+        
+        size_t priceIdx = getIndex(incoming.price);
+        
+        if (incoming.isBuy) bidLevels[priceIdx].push_back(poolIdx);
+        else askLevels[priceIdx].push_back(poolIdx);
+
+        std::cout << "[Strategy] Price " << incoming.price << " mapped to Index " << priceIdx << std::endl;
     }
 };
 
